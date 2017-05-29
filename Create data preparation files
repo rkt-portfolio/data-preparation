@@ -1,0 +1,114 @@
+******************************************************************************************;
+***                                                                                    ***;
+*** JOURNAL ENTRY DATA PREP                                                            ***;
+***                                                                                    ***;
+******************************************************************************************;
+
+*****************************************;
+*** UPDATE CLIENT NAME AND PATH BELOW ***;
+*****************************************;
+
+%LET CLIENT = IPM_Client_Name;
+%LET PATH= UPDATE_THE_PATH;
+
+libname SASDATA "&PATH.\sasdata";
+
+**********************************;
+*** CREATING JE FILE FOR OPTIX ***;
+**********************************;
+
+
+DATA JE (rename = (local_amt = F15_Loc_Amount debit_amt= F12_Debit credit_amt=F13_Credit jrn_entry= F02_JrnEntryID jrn_descr= F03_EntryDesc line_descr=F04_LineDesc period=F05_Period year=F06_YEAR posted_date=F07_Posted_Date effective_date=F08_Eff_Date user_id=F09_UserID account=F01_Account amount=F11_Amount currency=F14_Currency man_sys=F10_ManSys user_name=F17_User_Name approver=F18_ApproverID location=F16_Location) );
+RETAIN account jrn_entry jrn_descr line_descr period year posted_date effective_date user_id man_sys amount debit_amt credit_amt currency local_amt user_name approver approver_name ;
+SET SASDATA.&CLIENT._WI;
+
+*REMOVING THE TEXT QUALIFIER AND ADDITIONAL DELIMITER FROM JOURNAL ENTRY ID*;
+		JRN_ENTRY=STRIP(TRANWRD(JRN_ENTRY,'"'," "));
+		JRN_ENTRY=STRIP(TRANWRD(JRN_ENTRY,"|"," "));
+
+*REMOVING THE TEXT QUALIFIER AND ADDITIONAL DELIMITER FROM JOURNAL ENTRY DESCRIPTION*;
+		JRN_DESCR=STRIP(TRANWRD(JRN_DESCR,'"'," "));
+		JRN_DESCR=STRIP(TRANWRD(JRN_DESCR,"|"," "));
+
+*REMOVING THE TEXT QUALIFIER AND ADDITIONAL DELIMITER FROM LINE DESCRIPTION*;
+		LINE_DESCR=STRIP(TRANWRD(LINE_DESCR,'"'," "));
+		LINE_DESCR=STRIP(TRANWRD(LINE_DESCR,"|"," "));
+
+local_amt = local_debit_amt - local_credit_amt;
+Format local_debit_amt local_credit_amt local_amt debit_amt credit_amt amount 32.2;
+keep local_amt debit_amt credit_amt jrn_entry jrn_descr line_descr period year posted_date effective_date user_id account amount currency man_sys user_name approver approver_name location source_sys jrnline_num custexcl;
+Run;
+
+
+Proc Export DATA = Optix_JE
+OUTFILE = "&PATH.\&CLIENT._JE.txt"
+DBMS = DLM Replace;
+Delimiter = "|";
+Run;
+
+************************************************************************;
+*** TEST5 - User ID Check for different letter case [ABC, Abc, aBC]  ***;
+************************************************************************;
+
+PROC SQL;
+CREATE TABLE USER_SUMM AS
+	SELECT DISTINCT(USER_ID), 
+			COUNT(*) AS COUNT
+			FROM SASDATA.&CLIENT._WI
+	GROUP BY USER_ID;
+QUIT;
+
+DATA USER_SUMM1;
+SET USER_SUMM;
+USER_ID_NEW = UPCASE(USER_ID);
+DROP COUNT;
+RUN;
+
+PROC SQL;
+CREATE TABLE User_SUMM2 AS
+	SELECT DISTINCT(USER_ID_NEW), 
+			COUNT(*) AS COUNT
+			FROM USER_SUMM1
+	GROUP BY USER_ID_NEW;
+QUIT;
+
+DATA USER_SUMM3;
+SET USER_SUMM2;
+IF COUNT > 1;
+RUN;
+
+PROC SORT DATA=USER_SUMM1; BY USER_ID_NEW; RUN;
+PROC SORT DATA=USER_SUMM3; BY USER_ID_NEW; RUN;
+
+DATA FLAGGED (KEEP = USER_ID);
+MERGE USER_SUMM1 (IN = A) USER_SUMM3 (IN = B);
+BY USER_ID_NEW;
+IF B;
+RUN;
+
+PROC SQL;
+SELECT COUNT(*) INTO: USER_COUNT FROM FLAGGED;
+QUIT;
+
+%MACRO PRINT;
+%IF %SYSEVALF(&USER_COUNT.) > 0 %THEN %DO;
+%PUT '
+
+		"There are User IDs with multiple letter case, please review the Mixed_Case_UserIDs text file "';
+Proc Export DATA = FLAGGED
+OUTFILE = "&PATH.\Mixed_Case_UserIDs.TXT"
+DBMS = DLM Replace;
+Delimiter = "|";
+Run;
+%END;
+%ELSE %DO;
+%PUT '
+
+				"There are no User IDs with multiple letter case"';
+%END;
+%MEND;
+%PRINT;
+
+********************;
+*** END OF CODE	 ***;
+********************;
